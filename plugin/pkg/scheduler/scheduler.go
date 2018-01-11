@@ -39,7 +39,10 @@ import (
 	"github.com/pkg/errors"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/kubernetes/plugin/pkg/scheduler/tools"
+	"sync"
 )
+
+const Scheduled = "scheduled"
 
 // Binder knows how to write a binding.
 type Binder interface {
@@ -50,6 +53,11 @@ type Binder interface {
 // PodCondition
 type PodConditionUpdater interface {
 	Update(pod *v1.Pod, podCondition *v1.PodCondition) error
+}
+
+type ConfigMapTool interface {
+	Get(namespace, name string) (*v1.ConfigMap, error)
+	Update(configMap *v1.ConfigMap) error
 }
 
 // Scheduler watches for new unscheduled pods. It attempts to find
@@ -107,6 +115,8 @@ type Config struct {
 	// with scheduling, PodScheduled condition will be updated in apiserver in /bind
 	// handler so that binding and setting PodCondition it is atomic.
 	PodConditionUpdater PodConditionUpdater
+
+	ConfigMapTool ConfigMapTool
 
 	// NextPod should be a function that blocks until the next pod
 	// is available. We don't use a channel for this, because scheduling
@@ -259,8 +269,13 @@ func (sched *Scheduler) scheduleOne() {
 
 	group := sched.config.NextSchedulingGroup()
 
+	glog.V(4).Info("Successfully get group %v", group)
+
 	if !sched.readyToScheduler(group) {
+		glog.V(4).Infof("Group is not ready to schedule %v", group.Group)
 		sched.config.PushBackSchedulingGroup(group)
+		time.Sleep(1 * time.Second)
+		return
 	}
 
 	for _, rb := range group.Resources {
@@ -300,8 +315,12 @@ func (sched *Scheduler) scheduleOne() {
 	}
 
 	// bind the pod to its host asynchronously (we can do this b/c of the assumption step above).
+
+	var waitGroup sync.WaitGroup
 	for _, pod := range group.Status.PodsToBind {
+		waitGroup.Add(1)
 		go func() {
+			defer waitGroup.Done()
 			err := sched.bind(pod, &v1.Binding{
 				ObjectMeta: metav1.ObjectMeta{Namespace: pod.Namespace, Name: pod.Name, UID: pod.UID},
 				Target: v1.ObjectReference{
@@ -314,7 +333,31 @@ func (sched *Scheduler) scheduleOne() {
 			}
 		}()
 	}
+	waitGroup.Wait()
 
+	sched.updateConfigMap(group.Group)
+}
+
+func (sched *Scheduler) updateConfigMap(key string) {
+	ns, name, _ := cache.SplitMetaNamespaceKey(key)
+	if len(ns) == 0 || len(name) == 0 {
+		glog.Warningf("invalid job key %q: either namespace or name is missing", key)
+		return
+	}
+	configMap, err := sched.config.ConfigMapTool.Get(ns, name)
+	if err != nil {
+		glog.V(4).Infof("failed to get configmap %s/%s.", ns, name)
+		return
+	}
+	if configMap.Data != nil {
+		configMap.Data[Scheduled] = "true"
+	} else {
+		configMap.Data = map[string]string{Scheduled: "true"}
+	}
+	err = sched.config.ConfigMapTool.Update(configMap)
+	if err != nil {
+		glog.Warningf("failed to update configmap %s/%s.", ns, name)
+	}
 }
 
 func (sched *Scheduler) schedulerPod(pod *v1.Pod) error {
@@ -337,9 +380,10 @@ func (sched *Scheduler) schedulerPod(pod *v1.Pod) error {
 	// Tell the cache to assume that a pod now is running on a given node, even though it hasn't been bound yet.
 	// This allows us to keep scheduling without waiting on binding to occur.
 	assumedPod := *pod
-
 	// assume modifies `assumedPod` by setting NodeName=suggestedHost
 	sched.assume(&assumedPod, suggestedHost)
+
+	pod.Spec.NodeName = suggestedHost
 	return nil
 }
 

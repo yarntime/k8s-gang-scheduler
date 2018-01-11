@@ -484,6 +484,7 @@ func (f *ConfigFactory) CreateFromKeys(predicateKeys, priorityKeys sets.String, 
 		Algorithm:           algo,
 		Binder:              f.getBinder(extenders),
 		PodConditionUpdater: &podConditionUpdater{f.client},
+		ConfigMapTool:       &configMapTool{f.client},
 		WaitForCacheSync: func() bool {
 			return cache.WaitForCacheSync(f.StopEverything, f.scheduledPodsHasSynced)
 		},
@@ -572,7 +573,7 @@ func (f *ConfigFactory) pushbackSchedulingGroup(group *schedulerapi.SchedulingGr
 }
 
 func (f *ConfigFactory) ResponsibleForGroup(group *schedulerapi.SchedulingGroup) bool {
-	return f.schedulerName == group.SchedulerName
+	return f.schedulerName == group.SchedulerName || group.SchedulerName == ""
 }
 
 func getNodeConditionPredicate() corelisters.NodeConditionPredicate {
@@ -794,4 +795,21 @@ func (p *podConditionUpdater) Update(pod *v1.Pod, condition *v1.PodCondition) er
 		return err
 	}
 	return nil
+}
+
+type configMapTool struct {
+	Client clientset.Interface
+}
+
+func (c *configMapTool) Get(namespace, name string) (*v1.ConfigMap, error) {
+	config, err := c.Client.CoreV1().ConfigMaps(namespace).Get(name, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return config, nil
+}
+
+func (c *configMapTool) Update(configMap *v1.ConfigMap) error {
+	_, err := c.Client.CoreV1().ConfigMaps(configMap.Namespace).Update(configMap)
+	return err
 }
