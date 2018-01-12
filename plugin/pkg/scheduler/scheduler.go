@@ -327,12 +327,14 @@ func (sched *Scheduler) scheduleOne() {
 		waitGroup.Add(1)
 		go func(pod *v1.Pod) {
 			defer waitGroup.Done()
-			glog.Infof("Binding pod %s/%s to node %s", pod.Namespace, pod.Name, pod.Spec.NodeName)
+			nodeName := pod.Spec.NodeName
+			pod.Spec.NodeName = ""
+			glog.Infof("Binding pod %s/%s to node %s", pod.Namespace, pod.Name, nodeName)
 			err := sched.bind(pod, &v1.Binding{
 				ObjectMeta: metav1.ObjectMeta{Namespace: pod.Namespace, Name: pod.Name, UID: pod.UID},
 				Target: v1.ObjectReference{
 					Kind: "Node",
-					Name: pod.Spec.NodeName,
+					Name: nodeName,
 				},
 			})
 			if err != nil {
