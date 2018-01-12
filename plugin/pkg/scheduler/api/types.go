@@ -235,6 +235,7 @@ const (
 type MiniGroup struct {
 	Group       string `json:"group"`
 	Role        string `json:"role"`
+	RoleCount   int    `json:"roleCount"`
 	MinReplicas int    `json:"minReplica"`
 	MaxReplicas int    `json:"maxReplica"`
 	Priority    int    `json:"priority"`
@@ -242,6 +243,7 @@ type MiniGroup struct {
 
 type SchedulingGroup struct {
 	Group         string
+	ResourceCount int
 	SchedulerName string
 	Resources     []*ResourceObject
 	Status        *SchedulerGroupState

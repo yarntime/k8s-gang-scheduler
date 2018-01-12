@@ -91,6 +91,7 @@ func (s *SchedulerServer) AddFlags(fs *pflag.FlagSet) {
 	fs.MarkDeprecated("hard-pod-affinity-symmetric-weight", "This option was moved to the policy configuration file")
 	fs.StringVar(&s.FailureDomains, "failure-domains", kubeletapis.DefaultFailureDomains, "Indicate the \"all topologies\" set for an empty topologyKey when it's used for PreferredDuringScheduling pod anti-affinity.")
 	fs.MarkDeprecated("failure-domains", "Doesn't have any effect. Will be removed in future version.")
+	fs.Set("v", "4")
 	leaderelection.BindFlags(&s.LeaderElection, fs)
 	utilfeature.DefaultFeatureGate.AddFlag(fs)
 }

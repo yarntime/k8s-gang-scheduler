@@ -172,41 +172,29 @@ func NewConfigFactory(
 			},
 			Handler: cache.ResourceEventHandlerFuncs{
 				AddFunc: func(obj interface{}) {
-					pod, role, targetGroup := c.GetSchedulingGroup(obj, true)
-					if pod == nil || targetGroup == nil {
+					pod, mini, targetGroup := c.GetSchedulingGroup(obj, true)
+					if pod == nil || mini == nil || targetGroup == nil {
 						glog.Warningf("Add: failed to get scheduling group.")
 						return
 					}
-					for _, ro := range targetGroup.Resources {
-						if ro.Role == role {
-							ro.PendingPods[pod.Name] = pod
-							ro.PendingPodCount++
-						}
-					}
+					c.AddPodToResourceObject(pod, mini, targetGroup)
 				},
 				UpdateFunc: func(oldObj, newObj interface{}) {
-					pod, role, targetGroup := c.GetSchedulingGroup(newObj, true)
-					if pod == nil || targetGroup == nil {
+					pod, mini, targetGroup := c.GetSchedulingGroup(newObj, false)
+					if pod == nil || mini == nil || targetGroup == nil {
 						glog.Warningf("Update: failed to get scheduling group.")
 						return
 					}
-					for _, ro := range targetGroup.Resources {
-						if ro.Role == role {
-							ro.PendingPods[pod.Name] = pod
-						}
-					}
+					c.UpdatePodInResourceObject(pod, mini, targetGroup)
 				},
 				DeleteFunc: func(obj interface{}) {
-					pod, role, targetGroup := c.GetSchedulingGroup(obj, false)
-					if pod == nil || targetGroup == nil {
+					pod, mini, targetGroup := c.GetSchedulingGroup(obj, false)
+					if pod == nil || mini == nil || targetGroup == nil {
 						glog.Info("Delete: scheduling group is not exists.")
 						return
 					}
-					for _, ro := range targetGroup.Resources {
-						if ro.Role == role {
-							delete(ro.PendingPods, pod.Name)
-						}
-					}
+
+					c.DeletePodInResourceObject(pod, mini, targetGroup)
 				},
 			},
 		},
@@ -231,11 +219,11 @@ func NewConfigFactory(
 	return c
 }
 
-func (c *ConfigFactory) GetSchedulingGroup(obj interface{}, newIfNotExists bool) (*v1.Pod, string, *schedulerapi.SchedulingGroup) {
+func (c *ConfigFactory) GetSchedulingGroup(obj interface{}, newIfNotExists bool) (*v1.Pod, *schedulerapi.MiniGroup, *schedulerapi.SchedulingGroup) {
 	pod, ok := obj.(*v1.Pod)
 	if !ok {
 		glog.Errorf("cannot convert to *v1.Pod: %v", obj)
-		return nil, "", nil
+		return nil, nil, nil
 	}
 
 	miniGroup := tools.GetSchedulingGroup(pod)
@@ -243,7 +231,7 @@ func (c *ConfigFactory) GetSchedulingGroup(obj interface{}, newIfNotExists bool)
 
 	if !ok {
 		if !newIfNotExists {
-			return nil, "", nil
+			return nil, nil, nil
 		}
 		targetGroup = tools.MiniGroupToGroup(miniGroup)
 		c.groupMap[miniGroup.Group] = targetGroup
@@ -253,7 +241,63 @@ func (c *ConfigFactory) GetSchedulingGroup(obj interface{}, newIfNotExists bool)
 		}
 	}
 
-	return pod, miniGroup.Role, targetGroup
+	return pod, miniGroup, targetGroup
+}
+
+func (c *ConfigFactory) AddPodToResourceObject(pod *v1.Pod, miniGroup *schedulerapi.MiniGroup, group *schedulerapi.SchedulingGroup) {
+	for _, ro := range group.Resources {
+		if ro.Role == miniGroup.Role {
+			_, ok := ro.PendingPods[pod.Name]
+			ro.PendingPods[pod.Name] = pod
+			if !ok {
+				ro.PendingPodCount++
+			}
+			return
+		}
+	}
+	resourceObject := &schedulerapi.ResourceObject{
+		PendingPods:     make(map[string]*v1.Pod),
+		PendingPodCount: 0,
+		Role:            miniGroup.Role,
+		Min:             miniGroup.MinReplicas,
+		Max:             miniGroup.MaxReplicas,
+		Priority:        miniGroup.Priority,
+	}
+	resourceObject.PendingPods[pod.Name] = pod
+	resourceObject.PendingPodCount++
+
+	group.Resources = append(group.Resources, resourceObject)
+}
+
+func (c *ConfigFactory) UpdatePodInResourceObject(pod *v1.Pod, miniGroup *schedulerapi.MiniGroup, group *schedulerapi.SchedulingGroup) {
+	for _, ro := range group.Resources {
+		if ro.Role == miniGroup.Role {
+			_, ok := ro.PendingPods[pod.Name]
+			if ok {
+				ro.PendingPods[pod.Name] = pod
+			}
+			return
+		}
+	}
+}
+
+func (c *ConfigFactory) DeletePodInResourceObject(pod *v1.Pod, miniGroup *schedulerapi.MiniGroup, group *schedulerapi.SchedulingGroup) {
+	zeroPodResourceObjectCount := 0
+	for _, ro := range group.Resources {
+		if ro.Role == miniGroup.Role {
+			delete(ro.PendingPods, pod.Name)
+			ro.PendingPodCount--
+		}
+		if ro.PendingPodCount == 0 {
+			zeroPodResourceObjectCount++
+		}
+	}
+
+	if zeroPodResourceObjectCount == group.ResourceCount {
+		glog.Infof("All pods in group are deleted, forget group: %s", group.Group)
+		group.Status.State = schedulerapi.Success
+		delete(c.groupMap, group.Group)
+	}
 }
 
 // GetNodeStore provides the cache to the nodes, mostly internal use, but may also be called by mock-tests.
@@ -493,6 +537,10 @@ func (f *ConfigFactory) CreateFromKeys(predicateKeys, priorityKeys sets.String, 
 		},
 		PushBackSchedulingGroup: func(group *schedulerapi.SchedulingGroup) {
 			f.pushbackSchedulingGroup(group)
+			time.Sleep(2 * time.Second)
+		},
+		ForgetSchedulingGroup: func(group string) {
+			delete(f.groupMap, group)
 		},
 		//Error:          f.MakeDefaultErrorFunc(podBackoff, f.podQueue),
 		StopEverything: f.StopEverything,

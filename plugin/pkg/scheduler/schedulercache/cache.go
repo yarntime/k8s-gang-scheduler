@@ -28,7 +28,7 @@ import (
 )
 
 var (
-	cleanAssumedPeriod = 1 * time.Second
+	cleanAssumedPeriod = 10 * time.Second
 )
 
 // New returns a Cache implementation.
@@ -142,12 +142,9 @@ func (cache *schedulerCache) finishBinding(pod *v1.Pod, now time.Time) error {
 	defer cache.mu.Unlock()
 
 	glog.V(5).Infof("Finished binding for pod %v. Can be expired.", key)
-	currState, ok := cache.podStates[key]
-	if ok && cache.assumedPods[key] {
-		dl := now.Add(cache.ttl)
-		currState.bindingFinished = true
-		currState.deadline = &dl
-	}
+
+	delete(cache.assumedPods, key)
+	delete(cache.podStates, key)
 	return nil
 }
 
@@ -255,19 +252,12 @@ func (cache *schedulerCache) UpdatePod(oldPod, newPod *v1.Pod) error {
 	defer cache.mu.Unlock()
 
 	currState, ok := cache.podStates[key]
-	switch {
-	// An assumed pod won't have Update/Remove event. It needs to have Add event
-	// before Update event, in which case the state would change from Assumed to Added.
-	case ok && !cache.assumedPods[key]:
-		if currState.pod.Spec.NodeName != newPod.Spec.NodeName {
-			glog.Errorf("Pod %v updated on a different node than previously added to.", key)
-			glog.Fatalf("Schedulercache is corrupted and can badly affect scheduling decisions")
-		}
-		if err := cache.updatePod(oldPod, newPod); err != nil {
-			return err
-		}
-	default:
-		return fmt.Errorf("pod %v state wasn't added but get updated", key)
+	if ok && currState.pod.Spec.NodeName != newPod.Spec.NodeName {
+		glog.Errorf("Pod %v updated on a different node than previously added to.", key)
+		glog.Fatalf("Schedulercache is corrupted and can badly affect scheduling decisions")
+	}
+	if err := cache.updatePod(oldPod, newPod); err != nil {
+		return err
 	}
 	return nil
 }
@@ -282,22 +272,17 @@ func (cache *schedulerCache) RemovePod(pod *v1.Pod) error {
 	defer cache.mu.Unlock()
 
 	currState, ok := cache.podStates[key]
-	switch {
-	// An assumed pod won't have Delete/Remove event. It needs to have Add event
-	// before Remove event, in which case the state would change from Assumed to Added.
-	case ok && !cache.assumedPods[key]:
-		if currState.pod.Spec.NodeName != pod.Spec.NodeName {
-			glog.Errorf("Pod %v removed from a different node than previously added to.", key)
-			glog.Fatalf("Schedulercache is corrupted and can badly affect scheduling decisions")
-		}
-		err := cache.removePod(currState.pod)
+	if ok && currState.pod.Spec.NodeName != pod.Spec.NodeName {
+		glog.Errorf("Pod %v removed from a different node than previously added to.", key)
+		glog.Fatalf("Schedulercache is corrupted and can badly affect scheduling decisions")
+	} else if ok {
+		err = cache.removePod(currState.pod)
 		if err != nil {
 			return err
 		}
 		delete(cache.podStates, key)
-	default:
-		return fmt.Errorf("pod state wasn't added but get removed. Pod key: %v", key)
 	}
+
 	return nil
 }
 
@@ -360,7 +345,8 @@ func (cache *schedulerCache) cleanupAssumedPods(now time.Time) {
 	for key := range cache.assumedPods {
 		ps, ok := cache.podStates[key]
 		if !ok {
-			panic("Key found in assumed set but not in podStates. Potentially a logical error.")
+			glog.Warningf("Key found in assumed set but not in podStates.")
+			continue
 		}
 		if !ps.bindingFinished {
 			glog.Warningf("Couldn't expire cache for pod %v/%v. Binding is still in progress.",

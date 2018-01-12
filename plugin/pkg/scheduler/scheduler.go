@@ -96,7 +96,10 @@ type Configurator interface {
 	CreateFromProvider(providerName string) (*Config, error)
 	CreateFromConfig(policy schedulerapi.Policy) (*Config, error)
 	CreateFromKeys(predicateKeys, priorityKeys sets.String, extenders []algorithm.SchedulerExtender) (*Config, error)
-	GetSchedulingGroup(obj interface{}, newIfNotExists bool) (*v1.Pod, string, *schedulerapi.SchedulingGroup)
+	GetSchedulingGroup(obj interface{}, newIfNotExists bool) (*v1.Pod, *schedulerapi.MiniGroup, *schedulerapi.SchedulingGroup)
+	AddPodToResourceObject(pod *v1.Pod, miniGroup *schedulerapi.MiniGroup, group *schedulerapi.SchedulingGroup)
+	UpdatePodInResourceObject(pod *v1.Pod, miniGroup *schedulerapi.MiniGroup, group *schedulerapi.SchedulingGroup)
+	DeletePodInResourceObject(pod *v1.Pod, miniGroup *schedulerapi.MiniGroup, group *schedulerapi.SchedulingGroup)
 }
 
 // Config is an implementation of the Scheduler's configured input data.
@@ -125,6 +128,8 @@ type Config struct {
 	NextSchedulingGroup func() *schedulerapi.SchedulingGroup
 
 	PushBackSchedulingGroup func(*schedulerapi.SchedulingGroup)
+
+	ForgetSchedulingGroup func(group string)
 
 	// WaitForCacheSync waits for scheduler cache to populate.
 	// It returns true if it was successful, false if the controller should shutdown.
@@ -185,7 +190,7 @@ func (sched *Scheduler) schedule(pod *v1.Pod) (string, error) {
 			return "", err
 		}
 		pod = copied.(*v1.Pod)
-		sched.config.Error(pod, err)
+		//sched.config.Error(pod, err)
 		sched.config.Recorder.Eventf(pod, v1.EventTypeWarning, "FailedScheduling", "%v", err)
 		sched.config.PodConditionUpdater.Update(pod, &v1.PodCondition{
 			Type:    v1.PodScheduled,
@@ -214,7 +219,7 @@ func (sched *Scheduler) assume(assumed *v1.Pod, host string) error {
 		// This relies on the fact that Error will check if the pod has been bound
 		// to a node and if so will not add it back to the unscheduled pods queue
 		// (otherwise this would cause an infinite loop).
-		sched.config.Error(assumed, err)
+		//sched.config.Error(assumed, err)
 		sched.config.Recorder.Eventf(assumed, v1.EventTypeWarning, "FailedScheduling", "AssumePod failed: %v", err)
 		sched.config.PodConditionUpdater.Update(assumed, &v1.PodCondition{
 			Type:    v1.PodScheduled,
@@ -249,7 +254,7 @@ func (sched *Scheduler) bind(assumed *v1.Pod, b *v1.Binding) error {
 		if err := sched.config.SchedulerCache.ForgetPod(assumed); err != nil {
 			glog.Errorf("scheduler cache ForgetPod failed: %v", err)
 		}
-		sched.config.Error(assumed, err)
+		//sched.config.Error(assumed, err)
 		sched.config.Recorder.Eventf(assumed, v1.EventTypeWarning, "FailedScheduling", "Binding rejected: %v", err)
 		sched.config.PodConditionUpdater.Update(assumed, &v1.PodCondition{
 			Type:   v1.PodScheduled,
@@ -269,12 +274,13 @@ func (sched *Scheduler) scheduleOne() {
 
 	group := sched.config.NextSchedulingGroup()
 
-	glog.V(4).Info("Successfully get group %v", group)
+	glog.Infof("Successfully get group %v", group)
 
 	if !sched.readyToScheduler(group) {
-		glog.V(4).Infof("Group is not ready to schedule %v", group.Group)
-		sched.config.PushBackSchedulingGroup(group)
-		time.Sleep(1 * time.Second)
+		glog.Infof("Group is not ready to schedule %v", group.Group)
+		if group.Status.State != schedulerapi.Success {
+			sched.config.PushBackSchedulingGroup(group)
+		}
 		return
 	}
 
@@ -308,7 +314,7 @@ func (sched *Scheduler) scheduleOne() {
 			}
 			err := sched.schedulerPod(pod)
 			if err != nil {
-				continue
+				break
 			}
 			group.Status.PodsToBind[pod.Name] = pod
 		}
@@ -319,8 +325,9 @@ func (sched *Scheduler) scheduleOne() {
 	var waitGroup sync.WaitGroup
 	for _, pod := range group.Status.PodsToBind {
 		waitGroup.Add(1)
-		go func() {
+		go func(pod *v1.Pod) {
 			defer waitGroup.Done()
+			glog.Infof("Binding pod %s/%s to node %s", pod.Namespace, pod.Name, pod.Spec.NodeName)
 			err := sched.bind(pod, &v1.Binding{
 				ObjectMeta: metav1.ObjectMeta{Namespace: pod.Namespace, Name: pod.Name, UID: pod.UID},
 				Target: v1.ObjectReference{
@@ -331,11 +338,14 @@ func (sched *Scheduler) scheduleOne() {
 			if err != nil {
 				glog.Errorf("Internal error binding pod: (%v)", err)
 			}
-		}()
+		}(pod)
 	}
 	waitGroup.Wait()
 
 	sched.updateConfigMap(group.Group)
+
+	group.Status.State = schedulerapi.Success
+	sched.config.ForgetSchedulingGroup(group.Group)
 }
 
 func (sched *Scheduler) updateConfigMap(key string) {
@@ -389,6 +399,9 @@ func (sched *Scheduler) schedulerPod(pod *v1.Pod) error {
 
 func (sched *Scheduler) readyToScheduler(group *schedulerapi.SchedulingGroup) bool {
 	result := true
+	if len(group.Resources) != group.ResourceCount {
+		return false
+	}
 	for _, rb := range group.Resources {
 		if rb.PendingPodCount != rb.Max {
 			result = false

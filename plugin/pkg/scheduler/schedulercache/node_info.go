@@ -287,6 +287,8 @@ func (n *NodeInfo) addPod(pod *v1.Pod) {
 	n.updateUsedPorts(pod, true)
 
 	n.generation++
+
+	glog.Infof("After add pod %s/%s, node's request resource is %v", pod.Namespace, pod.Name, n.requestedResource.MilliCPU/1000)
 }
 
 // removePod subtracts pod information to this NodeInfo.
@@ -338,6 +340,8 @@ func (n *NodeInfo) removePod(pod *v1.Pod) error {
 			n.updateUsedPorts(pod, false)
 
 			n.generation++
+
+			glog.Infof("After remove pod %s/%s, node's request resource is %v", pod.Namespace, pod.Name, n.requestedResource.MilliCPU/1000)
 
 			return nil
 		}

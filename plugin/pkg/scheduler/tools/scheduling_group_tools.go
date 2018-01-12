@@ -42,6 +42,7 @@ func NewMiniSchedulerGroup(pod *v1.Pod) *schedulerapi.MiniGroup {
 	return &schedulerapi.MiniGroup{
 		Group:       GetKeyOfPod(pod),
 		Role:        DefaultRole,
+		RoleCount:   1,
 		MaxReplicas: 1,
 		MinReplicas: 1,
 		Priority:    1,
@@ -50,16 +51,9 @@ func NewMiniSchedulerGroup(pod *v1.Pod) *schedulerapi.MiniGroup {
 
 func MiniGroupToGroup(miniGroup *schedulerapi.MiniGroup) *schedulerapi.SchedulingGroup {
 	return &schedulerapi.SchedulingGroup{
-		Group: miniGroup.Group,
-		Resources: []*schedulerapi.ResourceObject{
-			{
-				Role:        miniGroup.Role,
-				Min:         miniGroup.MinReplicas,
-				Max:         miniGroup.MaxReplicas,
-				Priority:    miniGroup.Priority,
-				PendingPods: make(map[string]*v1.Pod),
-			},
-		},
+		Group:         miniGroup.Group,
+		ResourceCount: miniGroup.RoleCount,
+		Resources:     []*schedulerapi.ResourceObject{},
 		Status: &schedulerapi.SchedulerGroupState{
 			State:      schedulerapi.Started,
 			PodsToBind: make(map[string]*v1.Pod),
@@ -75,8 +69,8 @@ func SortGroupResource(group *schedulerapi.SchedulingGroup) {
 	l := len(group.Resources)
 	for i := 0; i < l; i++ {
 		for j := 0; j < l-i-1; j++ {
-			if group.Resources[i].Priority < group.Resources[j].Priority {
-				group.Resources[i], group.Resources[j] = group.Resources[j], group.Resources[i]
+			if group.Resources[j].Priority < group.Resources[j+1].Priority {
+				group.Resources[j], group.Resources[j+1] = group.Resources[j+1], group.Resources[j]
 			}
 		}
 	}
