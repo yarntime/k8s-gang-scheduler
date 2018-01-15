@@ -288,7 +288,7 @@ func (n *NodeInfo) addPod(pod *v1.Pod) {
 
 	n.generation++
 
-	glog.Infof("After add pod %s/%s, node's request resource is %v", pod.Namespace, pod.Name, n.requestedResource.MilliCPU/1000)
+	glog.V(4).Infof("After add pod %s/%s, node's request resource is %v", pod.Namespace, pod.Name, n.requestedResource.MilliCPU/1000)
 }
 
 // removePod subtracts pod information to this NodeInfo.
@@ -341,7 +341,7 @@ func (n *NodeInfo) removePod(pod *v1.Pod) error {
 
 			n.generation++
 
-			glog.Infof("After remove pod %s/%s, node's request resource is %v", pod.Namespace, pod.Name, n.requestedResource.MilliCPU/1000)
+			glog.V(4).Infof("After remove pod %s/%s, node's request resource is %v", pod.Namespace, pod.Name, n.requestedResource.MilliCPU/1000)
 
 			return nil
 		}

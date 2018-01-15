@@ -42,7 +42,10 @@ import (
 	"sync"
 )
 
-const Scheduled = "scheduled"
+const (
+	Scheduled = "scheduled"
+	Cause     = "cause"
+)
 
 // Binder knows how to write a binding.
 type Binder interface {
@@ -191,7 +194,7 @@ func (sched *Scheduler) schedule(pod *v1.Pod) (string, error) {
 		}
 		pod = copied.(*v1.Pod)
 		//sched.config.Error(pod, err)
-		sched.config.Recorder.Eventf(pod, v1.EventTypeWarning, "FailedScheduling", "%v", err)
+		//sched.config.Recorder.Eventf(pod, v1.EventTypeWarning, "FailedScheduling", "%v", err)
 		sched.config.PodConditionUpdater.Update(pod, &v1.PodCondition{
 			Type:    v1.PodScheduled,
 			Status:  v1.ConditionFalse,
@@ -286,10 +289,11 @@ func (sched *Scheduler) scheduleOne() {
 
 	for _, rb := range group.Resources {
 		cur := 0
+		var err error
 		for _, pod := range rb.PendingPods {
-			err := sched.schedulerPod(pod)
+			err = sched.schedulerPod(pod)
 			if err != nil {
-				continue
+				break
 			}
 			group.Status.PodsToBind[pod.Name] = pod
 			cur++
@@ -298,7 +302,10 @@ func (sched *Scheduler) scheduleOne() {
 			}
 		}
 		if cur < rb.Min {
-			glog.Errorf("Failed to schedule group %s/%s", group.Group, rb.Role)
+			if err != nil {
+				sched.updateConfigMap(group.Group, Cause, err.Error())
+			}
+			glog.Errorf("Failed to schedule group %s/%s, err: %v", group.Group, rb.Role, err)
 			sched.releaseResources(group)
 			sched.config.PushBackSchedulingGroup(group)
 			return
@@ -344,13 +351,13 @@ func (sched *Scheduler) scheduleOne() {
 	}
 	waitGroup.Wait()
 
-	sched.updateConfigMap(group.Group)
+	sched.updateConfigMap(group.Group, Scheduled, "true")
 
 	group.Status.State = schedulerapi.Success
 	sched.config.ForgetSchedulingGroup(group.Group)
 }
 
-func (sched *Scheduler) updateConfigMap(key string) {
+func (sched *Scheduler) updateConfigMap(key string, tag string, msg string) {
 	ns, name, _ := cache.SplitMetaNamespaceKey(key)
 	if len(ns) == 0 || len(name) == 0 {
 		glog.Warningf("invalid job key %q: either namespace or name is missing", key)
@@ -362,9 +369,9 @@ func (sched *Scheduler) updateConfigMap(key string) {
 		return
 	}
 	if configMap.Data != nil {
-		configMap.Data[Scheduled] = "true"
+		configMap.Data[tag] = msg
 	} else {
-		configMap.Data = map[string]string{Scheduled: "true"}
+		configMap.Data = map[string]string{tag: msg}
 	}
 	err = sched.config.ConfigMapTool.Update(configMap)
 	if err != nil {
