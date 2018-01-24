@@ -312,19 +312,14 @@ func (sched *Scheduler) scheduleOne() {
 		}
 	}
 
-	tools.SortGroupResource(group)
+	pods := tools.SortOtherPendingPods(group)
 
-	for _, rb := range group.Resources {
-		for _, pod := range rb.PendingPods {
-			if _, ok := group.Status.PodsToBind[pod.Name]; ok {
-				continue
-			}
-			err := sched.schedulerPod(pod)
-			if err != nil {
-				break
-			}
-			group.Status.PodsToBind[pod.Name] = pod
+	for _, pod := range pods {
+		err := sched.schedulerPod(pod)
+		if err != nil {
+			break
 		}
+		group.Status.PodsToBind[pod.Name] = pod
 	}
 
 	// bind the pod to its host asynchronously (we can do this b/c of the assumption step above).

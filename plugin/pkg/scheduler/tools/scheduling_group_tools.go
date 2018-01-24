@@ -65,7 +65,42 @@ func GetKeyOfPod(pod *v1.Pod) string {
 	return pod.Namespace + "/" + pod.Name
 }
 
-func SortGroupResource(group *schedulerapi.SchedulingGroup) {
+func SortOtherPendingPods(group *schedulerapi.SchedulingGroup) []*v1.Pod {
+	result := []*v1.Pod{}
+
+	finished := 0
+	targetCount := len(group.Resources)
+	posMap := make(map[int]int, targetCount)
+	podsMap := make(map[int][]*v1.Pod, targetCount)
+
+	sortGroupResource(group)
+
+	for index, resource := range group.Resources {
+		posMap[index] = 0
+		podsMap[index] = getResourcePendingPods(resource.PendingPods, group.Status.PodsToBind)
+	}
+
+	for {
+		for index, pods := range podsMap {
+			step := group.Resources[index].Priority
+			for step > 0 && posMap[index] < len(pods) {
+				result = append(result, pods[posMap[index]])
+				posMap[index]++
+				step--
+			}
+
+			if posMap[index] >= len(pods) {
+				finished++
+			}
+		}
+		if finished >= targetCount {
+			break
+		}
+	}
+	return result
+}
+
+func sortGroupResource(group *schedulerapi.SchedulingGroup) {
 	l := len(group.Resources)
 	for i := 0; i < l; i++ {
 		for j := 0; j < l-i-1; j++ {
@@ -74,4 +109,15 @@ func SortGroupResource(group *schedulerapi.SchedulingGroup) {
 			}
 		}
 	}
+}
+
+func getResourcePendingPods(pods map[string]*v1.Pod, podsToBind map[string]*v1.Pod) []*v1.Pod {
+	result := []*v1.Pod{}
+	for key, val := range pods {
+		if _, ok := podsToBind[key]; ok {
+			continue
+		}
+		result = append(result, val)
+	}
+	return result
 }
