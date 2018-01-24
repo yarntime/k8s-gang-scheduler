@@ -71,6 +71,7 @@ func SortOtherPendingPods(group *schedulerapi.SchedulingGroup) []*v1.Pod {
 	finished := 0
 	targetCount := len(group.Resources)
 	posMap := make(map[int]int, targetCount)
+	finishedMap := make(map[int]bool, targetCount)
 	podsMap := make(map[int][]*v1.Pod, targetCount)
 
 	sortGroupResource(group)
@@ -89,7 +90,8 @@ func SortOtherPendingPods(group *schedulerapi.SchedulingGroup) []*v1.Pod {
 				step--
 			}
 
-			if posMap[index] >= len(pods) {
+			if posMap[index] >= len(pods) && !finishedMap[index] {
+				finishedMap[index] = true
 				finished++
 			}
 		}
