@@ -358,6 +358,7 @@ func calculateResource(pod *v1.Pod) (res Resource, non0_cpu int64, non0_mem int6
 			case v1.ResourceMemory:
 				res.Memory += rQuant.Value()
 			case v1.ResourceNvidiaGPU:
+			case v1.ResourceNewNvidiaGPU:
 				res.NvidiaGPU += rQuant.Value()
 			case v1.ResourceStorageOverlay:
 				res.StorageOverlay += rQuant.Value()
@@ -409,6 +410,7 @@ func (n *NodeInfo) SetNode(node *v1.Node) error {
 		case v1.ResourceMemory:
 			n.allocatableResource.Memory = rQuant.Value()
 		case v1.ResourceNvidiaGPU:
+		case v1.ResourceNewNvidiaGPU:
 			n.allocatableResource.NvidiaGPU = rQuant.Value()
 		case v1.ResourcePods:
 			n.allowedPodNumber = int(rQuant.Value())
